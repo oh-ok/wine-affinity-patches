@@ -1,0 +1,37 @@
+diff --git a/dlls/dxcore/Makefile.in b/dlls/dxcore/Makefile.in
+index 3a1d12c73e5..42269825d70 100644
+--- a/dlls/dxcore/Makefile.in
++++ b/dlls/dxcore/Makefile.in
+@@ -1,4 +1,8 @@
+ MODULE = dxcore.dll
++IMPORTLIB = dxcore
++IMPORTS = dxgi dxguid uuid wined3d user32 win32u
+ 
+ SOURCES = \
+-	main.c
++	main.c \
++	factory.c \
++	adapter.c
+diff --git a/dlls/dxcore/main.c b/dlls/dxcore/main.c
+index dcc294d04fa..719ac70fb96 100644
+--- a/dlls/dxcore/main.c
++++ b/dlls/dxcore/main.c
+@@ -16,13 +16,14 @@
+  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+  */
+ 
+-#include "dxcore.h"
+-#include "wine/debug.h"
++#define DXCORE_INIT_GUID
++#include "private.h"
++
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dxcore);
+ 
+ HRESULT WINAPI DXCoreCreateAdapterFactory( REFIID riid, void **ppv )
+ {
+-    FIXME( "riid %s, ppv %p stub!\n", debugstr_guid(riid), ppv );
+-    return E_NOINTERFACE;
++    TRACE( "riid %s, ppv %p\n", debugstr_guid(riid), ppv );
++    return dxcore_factory_create(riid, ppv);
+ }

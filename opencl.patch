@@ -1,0 +1,310 @@
+diff --git a/dlls/opencl/Makefile.in b/dlls/opencl/Makefile.in
+index 69df0a3073c..6152a54a4e0 100644
+--- a/dlls/opencl/Makefile.in
++++ b/dlls/opencl/Makefile.in
+@@ -1,9 +1,11 @@
+ MODULE    = opencl.dll
+ UNIXLIB   = opencl.so
+ UNIX_LIBS = $(OPENCL_LIBS)
++IMPORTS	  = dxguid
+ 
+ SOURCES = \
+ 	pe_thunks.c \
+ 	pe_wrappers.c \
+ 	unix_thunks.c \
+-	unix_wrappers.c
++	unix_wrappers.c \
++	cl_khr_d3d10_sharing.c
+diff --git a/dlls/opencl/make_opencl b/dlls/opencl/make_opencl
+index 6d9881c84b3..593ed24ee27 100755
+--- a/dlls/opencl/make_opencl
++++ b/dlls/opencl/make_opencl
+@@ -60,7 +60,6 @@ my %unsupported_extensions =
+         # Needs wined3d integration.
+         "cl_intel_d3d11_nv12_media_sharing" => 1,
+         "cl_intel_dx9_media_sharing" => 1,
+-        "cl_khr_d3d10_sharing" => 1,
+         "cl_khr_d3d11_sharing" => 1,
+         "cl_khr_dx9_media_sharing" => 1,
+         "cl_nv_d3d9_sharing" => 1,
+@@ -76,6 +75,11 @@ my %unsupported_extensions =
+         "cl_arm_shared_virtual_memory" => 1,
+     );
+ 
++my %provided_extensions =
++    (
++        "cl_khr_d3d10_sharing" => 1,  
++    );
++
+ sub generate_pe_thunk($$)
+ {
+     my ($name, $func_ref) = @_;
+@@ -509,6 +513,8 @@ sub parse_file($)
+         # support KHR_gl_sharing yet, but we need to export the functions anyway
+         # (some applications expect them to be present).
+         parse_feature($ext, 0) if lc($ext->{name}) eq "cl_khr_gl_sharing";
++        parse_feature($ext, 0) if lc($ext->{name}) eq "cl_khr_device_uuid";
++        parse_feature($ext, 0) if lc($ext->{name}) eq "cl_khr_d3d10_sharing";
+     }
+ }
+ 
+@@ -532,7 +538,8 @@ print PE "/* Automatically generated from OpenCL registry files; DO NOT EDIT! */
+ 
+ print PE "#include \"opencl_private.h\"\n";
+ print PE "#include \"opencl_types.h\"\n";
+-print PE "#include \"unixlib.h\"\n\n";
++print PE "#include \"unixlib.h\"\n";
++print PE "#include \"extensions.h\"\n\n";
+ 
+ print PE "WINE_DEFAULT_DEBUG_CHANNEL(opencl);\n" if $gen_traces;
+ 
+@@ -561,6 +568,12 @@ foreach (sort keys %unsupported_extensions)
+ print PE <<EOF
+     };
+ 
++    for (i = 0; i< ARRAY_SIZE(known_extensions); i++)
++    {
++        if (known_extensions[i].get_function && !strncasecmp( name, known_extensions[i].name, len ))
++            return TRUE;
++    }
++
+     for (i = 0; i < ARRAY_SIZE(unsupported); ++i)
+     {
+         if (!strncasecmp( name, unsupported[i], len ))
+diff --git a/dlls/opencl/opencl_types.h b/dlls/opencl/opencl_types.h
+index b116bb55259..b752f6f13f8 100644
+--- a/dlls/opencl/opencl_types.h
++++ b/dlls/opencl/opencl_types.h
+@@ -79,6 +79,8 @@ typedef struct _cl_image_desc
+  cl_mem mem_object;
+  };
+ } cl_image_desc;
++typedef cl_uint          cl_d3d10_device_source_khr;
++typedef cl_uint          cl_d3d10_device_set_khr;
+ typedef cl_uint          cl_gl_context_info;
+ typedef cl_uint          cl_gl_object_type;
+ typedef cl_uint          cl_gl_texture_info;
+@@ -90,6 +92,7 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_ADDRESS_MIRRORED_REPEAT 0x1134
+ #define CL_ADDRESS_NONE 0x1130
+ #define CL_ADDRESS_REPEAT 0x1133
++#define CL_ALL_DEVICES_FOR_D3D10_KHR 0x4013
+ #define CL_ARGB 0x10B7
+ #define CL_BGRA 0x10B6
+ #define CL_BLOCKING CL_TRUE
+@@ -103,6 +106,7 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_CHAR_BIT 8
+ #define CL_CHAR_MAX CL_SCHAR_MAX
+ #define CL_CHAR_MIN CL_SCHAR_MIN
++#define CL_COMMAND_ACQUIRE_D3D10_OBJECTS_KHR 0x4017
+ #define CL_COMMAND_ACQUIRE_GL_OBJECTS 0x11FF
+ #define CL_COMMAND_BARRIER 0x1205
+ #define CL_COMMAND_COPY_BUFFER 0x11F5
+@@ -121,6 +125,7 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_COMMAND_READ_BUFFER 0x11F3
+ #define CL_COMMAND_READ_BUFFER_RECT 0x1201
+ #define CL_COMMAND_READ_IMAGE 0x11F6
++#define CL_COMMAND_RELEASE_D3D10_OBJECTS_KHR 0x4018
+ #define CL_COMMAND_RELEASE_GL_OBJECTS 0x1200
+ #define CL_COMMAND_TASK 0x11F1
+ #define CL_COMMAND_UNMAP_MEM_OBJECT 0x11FD
+@@ -131,6 +136,8 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_COMPILER_NOT_AVAILABLE -3
+ #define CL_COMPILE_PROGRAM_FAILURE -15
+ #define CL_COMPLETE 0x0
++#define CL_CONTEXT_D3D10_DEVICE_KHR 0x4014
++#define CL_CONTEXT_D3D10_PREFER_SHARED_RESOURCES_KHR 0x402C
+ #define CL_CONTEXT_DEVICES 0x1081
+ #define CL_CONTEXT_INTEROP_USER_SYNC 0x1085
+ #define CL_CONTEXT_NUM_DEVICES 0x1083
+@@ -138,6 +145,10 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_CONTEXT_PROPERTIES 0x1082
+ #define CL_CONTEXT_REFERENCE_COUNT 0x1080
+ #define CL_CURRENT_DEVICE_FOR_GL_CONTEXT_KHR 0x2006
++#define CL_D3D10_DEVICE_KHR 0x4010
++#define CL_D3D10_DXGI_ADAPTER_KHR 0x4011
++#define CL_D3D10_RESOURCE_ALREADY_ACQUIRED_KHR -1004
++#define CL_D3D10_RESOURCE_NOT_ACQUIRED_KHR -1005
+ #define CL_DBL_DIG 15
+ #define CL_DBL_EPSILON 2.220446049250313080847e-16
+ #define CL_DBL_MANT_DIG 53
+@@ -180,6 +191,8 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_DEVICE_LINKER_AVAILABLE 0x103E
+ #define CL_DEVICE_LOCAL_MEM_SIZE 0x1023
+ #define CL_DEVICE_LOCAL_MEM_TYPE 0x1022
++#define CL_DEVICE_LUID_KHR 0x106D
++#define CL_DEVICE_LUID_VALID_KHR 0x106C
+ #define CL_DEVICE_MAX_CLOCK_FREQUENCY 0x100C
+ #define CL_DEVICE_MAX_COMPUTE_UNITS 0x1002
+ #define CL_DEVICE_MAX_CONSTANT_ARGS 0x1021
+@@ -202,6 +215,7 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_DEVICE_NATIVE_VECTOR_WIDTH_INT 0x1038
+ #define CL_DEVICE_NATIVE_VECTOR_WIDTH_LONG 0x1039
+ #define CL_DEVICE_NATIVE_VECTOR_WIDTH_SHORT 0x1037
++#define CL_DEVICE_NODE_MASK_KHR 0x106E
+ #define CL_DEVICE_NOT_AVAILABLE -2
+ #define CL_DEVICE_NOT_FOUND -1
+ #define CL_DEVICE_OPENCL_C_VERSION 0x103D
+@@ -237,9 +251,11 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_DEVICE_TYPE_CUSTOM (1 << 4)
+ #define CL_DEVICE_TYPE_DEFAULT (1 << 0)
+ #define CL_DEVICE_TYPE_GPU (1 << 2)
++#define CL_DEVICE_UUID_KHR 0x106A
+ #define CL_DEVICE_VENDOR 0x102C
+ #define CL_DEVICE_VENDOR_ID 0x1001
+ #define CL_DEVICE_VERSION 0x102F
++#define CL_DRIVER_UUID_KHR 0x106B
+ #define CL_DRIVER_VERSION 0x102D
+ #define CL_EGL_DISPLAY_KHR 0x2009
+ #define CL_EVENT_COMMAND_EXECUTION_STATUS 0x11D3
+@@ -291,6 +307,7 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_HUGE_VALF ((cl_float) 1e50)
+ #define CL_IMAGE_ARRAY_SIZE 0x1117
+ #define CL_IMAGE_BUFFER 0x1118
++#define CL_IMAGE_D3D10_SUBRESOURCE_KHR 0x4016
+ #define CL_IMAGE_DEPTH 0x1116
+ #define CL_IMAGE_ELEMENT_SIZE 0x1111
+ #define CL_IMAGE_FORMAT 0x1110
+@@ -315,6 +332,8 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_INVALID_COMMAND_QUEUE -36
+ #define CL_INVALID_COMPILER_OPTIONS -66
+ #define CL_INVALID_CONTEXT -34
++#define CL_INVALID_D3D10_DEVICE_KHR -1002
++#define CL_INVALID_D3D10_RESOURCE_KHR -1003
+ #define CL_INVALID_DEVICE -33
+ #define CL_INVALID_DEVICE_PARTITION_COUNT -68
+ #define CL_INVALID_DEVICE_TYPE -31
+@@ -381,6 +400,7 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_LOCAL 0x1
+ #define CL_LONG_MAX ((cl_long) 0x7FFFFFFFFFFFFFFFLL)
+ #define CL_LONG_MIN ((cl_long) -0x7FFFFFFFFFFFFFFFLL - 1LL)
++#define CL_LUID_SIZE_KHR 8
+ #define CL_LUMINANCE 0x10B9
+ #define CL_MAP_FAILURE -12
+ #define CL_MAP_READ (1 << 0)
+@@ -392,6 +412,7 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_MEM_CONTEXT 0x1106
+ #define CL_MEM_COPY_HOST_PTR (1 << 5)
+ #define CL_MEM_COPY_OVERLAP -8
++#define CL_MEM_D3D10_RESOURCE_KHR 0x4015
+ #define CL_MEM_FLAGS 0x1101
+ #define CL_MEM_HOST_NO_ACCESS (1 << 9)
+ #define CL_MEM_HOST_PTR 0x1103
+@@ -427,6 +448,7 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_PLATFORM_PROFILE 0x0900
+ #define CL_PLATFORM_VENDOR 0x0903
+ #define CL_PLATFORM_VERSION 0x0901
++#define CL_PREFERRED_DEVICES_FOR_D3D10_KHR 0x4012
+ #define CL_PROFILING_COMMAND_END 0x1283
+ #define CL_PROFILING_COMMAND_QUEUED 0x1280
+ #define CL_PROFILING_COMMAND_START 0x1282
+@@ -496,4 +518,5 @@ typedef cl_uint          cl_gl_platform_info;
+ #define CL_UNSIGNED_INT32 0x10DC
+ #define CL_UNSIGNED_INT8 0x10DA
+ #define CL_USHRT_MAX 65535
++#define CL_UUID_SIZE_KHR 16
+ #define CL_WGL_HDC_KHR 0x200B
+diff --git a/dlls/opencl/pe_thunks.c b/dlls/opencl/pe_thunks.c
+index f34826e5377..288a19e7e7a 100644
+--- a/dlls/opencl/pe_thunks.c
++++ b/dlls/opencl/pe_thunks.c
+@@ -3,6 +3,7 @@
+ #include "opencl_private.h"
+ #include "opencl_types.h"
+ #include "unixlib.h"
++#include "extensions.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(opencl);
+ 
+@@ -667,6 +668,12 @@ BOOL extension_is_supported( const char *name, size_t len )
+         "cl_qcom_ext_host_ptr",
+     };
+ 
++    for (i = 0; i< ARRAY_SIZE(known_extensions); i++)
++    {
++        if (known_extensions[i].get_function && !strncasecmp( name, known_extensions[i].name, len ))
++            return TRUE;
++    }
++
+     for (i = 0; i < ARRAY_SIZE(unsupported); ++i)
+     {
+         if (!strncasecmp( name, unsupported[i], len ))
+diff --git a/dlls/opencl/pe_wrappers.c b/dlls/opencl/pe_wrappers.c
+index efdf84ca136..2ca95312f42 100644
+--- a/dlls/opencl/pe_wrappers.c
++++ b/dlls/opencl/pe_wrappers.c
+@@ -22,6 +22,7 @@
+ #include "opencl_types.h"
+ #include "unixlib.h"
+ #include "wine/wgl.h"
++#include "extensions.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(opencl);
+ 
+@@ -35,6 +36,13 @@ static cl_int filter_extensions( const char *unix_exts, SIZE_T size, char *win_e
+ 
+     ext = unix_exts;
+     win_size = 0;
++
++    for (int i=0; i<ARRAY_SIZE(known_extensions); i++) {
++        if (!strstr(ext, known_extensions[i].name)) {
++            win_size += strlen(known_extensions[i].name) + 1;
++        }
++    }
++
+     while (*ext)
+     {
+         const char *end = strchr( ext, ' ' );
+@@ -53,6 +61,17 @@ static cl_int filter_extensions( const char *unix_exts, SIZE_T size, char *win_e
+     if (size < win_size) return CL_INVALID_VALUE;
+ 
+     win_exts[0] = 0;
++
++    for (int i=0; i<ARRAY_SIZE(known_extensions); i++) {
++        size_t len;
++        if (!strstr(unix_exts, known_extensions[i].name)) {
++            len = strlen(known_extensions[i].name);
++            if (p != win_exts) *p++ = ' ';
++            memcpy(p, known_extensions[i].name, len);
++            p += len;
++        }
++    }
++
+     ext = unix_exts;
+     while (*ext)
+     {
+@@ -72,6 +91,7 @@ static cl_int filter_extensions( const char *unix_exts, SIZE_T size, char *win_e
+         if (*end == ' ') ++end;
+         ext = end;
+     } 
++
+     *p = 0;
+ 
+     TRACE( "returning extension string %s\n", debugstr_a(win_exts) );
+@@ -174,8 +194,17 @@ cl_int WINAPI clGetDeviceInfo( cl_device_id device, cl_device_info name,
+ 
+ void * WINAPI clGetExtensionFunctionAddress( const char *func_name )
+ {
++    int i;
+     void * ret = 0;
+     TRACE("(%s)\n",func_name);
++    for (i=0; i<ARRAY_SIZE(known_extensions); i++) {
++        if (known_extensions->get_function == NULL)
++            continue;
++        ret = known_extensions->get_function(func_name);
++        if (ret)
++            break;
++    }
++    return ret;
+ #if 0
+     ret = clGetExtensionFunctionAddress(func_name);
+ #else
+@@ -197,7 +226,7 @@ cl_int WINAPI clSetCommandQueueProperty( cl_command_queue command_queue, cl_comm
+ void * WINAPI clGetExtensionFunctionAddressForPlatform( cl_platform_id platform, const char *func_name )
+ {
+     FIXME( "(%p, %s) stub!\n", platform, debugstr_a(func_name) );
+-    return NULL;
++    return clGetExtensionFunctionAddress(func_name);
+ }
+ 
+ 

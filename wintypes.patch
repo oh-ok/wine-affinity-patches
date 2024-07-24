@@ -1,0 +1,119 @@
+diff --git a/dlls/wintypes/main.c b/dlls/wintypes/main.c
+index 7d59ab92c41..b6762cdd9d3 100644
+--- a/dlls/wintypes/main.c
++++ b/dlls/wintypes/main.c
+@@ -26,6 +26,7 @@
+ #include "wine/debug.h"
+ #include "objbase.h"
+ 
++#include "fileapi.h"
+ #include "activation.h"
+ #include "rometadataresolution.h"
+ 
+@@ -379,6 +380,21 @@ HRESULT WINAPI RoResolveNamespace(HSTRING name, HSTRING windowsMetaDataDir,
+                                   DWORD *metaDataFilePathsCount, HSTRING **metaDataFilePaths,
+                                   DWORD *subNamespacesCount, HSTRING **subNamespaces)
+ {
++    const WCHAR *_name = WindowsGetStringRawBuffer(name, NULL);
++    HRESULT err = S_OK;
++    WCHAR winMdDir[MAX_PATH+1];
++    WCHAR glob[MAX_PATH+10];
++    UINT32 winMdDir_len;
++    DWORD resCount = 0;
++    UINT16 resSize = 4;
++    HSTRING *res = calloc(resSize, sizeof(HRESULT));
++    HSTRING *oldres;
++    WIN32_FIND_DATAW f_data;
++    HANDLE f_handle;
++    WCHAR *basename;
++    WCHAR *fullname;
++    UINT32 i;
++
+     FIXME("name %s, windowsMetaDataDir %s, metaDataFilePaths %p, subNamespaces %p stub!\n",
+             debugstr_hstring(name), debugstr_hstring(windowsMetaDataDir),
+             metaDataFilePaths, subNamespaces);
+@@ -386,5 +402,83 @@ HRESULT WINAPI RoResolveNamespace(HSTRING name, HSTRING windowsMetaDataDir,
+     if (!metaDataFilePaths && !subNamespaces)
+         return E_INVALIDARG;
+ 
+-    return RO_E_METADATA_NAME_NOT_FOUND;
++    if (subNamespaces) {
++        FIXME("subNamespaces not implemented\n");
++        return RO_E_METADATA_NAME_NOT_FOUND;
++    }
++
++    memset(winMdDir, 0, (MAX_PATH+1)*sizeof(WCHAR));
++    memset(glob, 0, (MAX_PATH+1)*sizeof(WCHAR));
++
++    if (!windowsMetaDataDir) {
++        winMdDir_len = GetWindowsDirectoryW(winMdDir, MAX_PATH);
++        wcscat(winMdDir, L"\\system32\\WinMetadata");
++        winMdDir_len += 22;
++    } else {
++        winMdDir_len = WindowsGetStringLen(windowsMetaDataDir);
++        memcpy(winMdDir, WindowsGetStringRawBuffer(windowsMetaDataDir, NULL), sizeof(WCHAR)*winMdDir_len);
++    }
++
++    memcpy(glob, winMdDir, wcslen(winMdDir)*sizeof(WCHAR));
++    wcscat(glob, L"\\*.winmd");
++
++    f_handle = FindFirstFileW(glob, &f_data);
++    if (f_handle == INVALID_HANDLE_VALUE) {
++        FIXME("NO .WINMD FILES.\n");
++        return RO_E_METADATA_NAME_NOT_FOUND;
++    }
++    if (res == NULL)
++        return E_OUTOFMEMORY;
++    basename = calloc(MAX_PATH+1, sizeof(WCHAR));
++    if (basename == NULL)
++        return E_OUTOFMEMORY;
++    fullname = calloc(MAX_PATH+wcslen(winMdDir)+1, sizeof(WCHAR));
++    if (fullname == NULL)
++        return E_OUTOFMEMORY;
++    while (err == S_OK) {
++        memset(basename, 0, (MAX_PATH+1)*sizeof(WCHAR));
++        memset(fullname, 0, (MAX_PATH+wcslen(winMdDir)+1)*sizeof(WCHAR));
++        lstrcpynW(basename, f_data.cFileName, wcslen(f_data.cFileName) - 5);
++        wcscpy(fullname, winMdDir);
++        if (
++            (wcslen(_name) >= wcslen(basename) && wcsstr(_name, basename) == _name)
++            || (wcslen(basename) > wcslen(_name) && wcsstr(basename, _name) == basename)
++        ) {
++            resCount ++;
++            if (resCount > resSize) {
++                oldres = res;
++                res = realloc(res, sizeof(HSTRING)*resSize*2);
++                if (res == NULL) {
++                    err = E_OUTOFMEMORY;
++                    res = oldres;
++                    break;
++                }
++            }
++
++            wcscat(fullname, L"\\");
++            wcscat(fullname, f_data.cFileName);
++            err = WindowsCreateString(fullname, wcslen(fullname), &res[resCount-1]);
++            FIXME("RESOLVED: %s\n", wine_dbgstr_hstring(res[resCount-1]));
++        }
++        if (!FindNextFileW(f_handle, &f_data))
++            break;
++    }
++    FindClose(f_handle);
++    free(basename);
++    free(fullname);
++    if (!err) {
++        if (resCount > 0) {
++            *metaDataFilePaths = res;
++            *metaDataFilePathsCount = resCount;
++        } else {
++            err = RO_E_METADATA_NAME_NOT_FOUND;
++        }
++    } else {
++        for (i=0; i<resCount-1; i++) {
++            WindowsDeleteString(res[i]);
++        }
++        free(res);
++    }
++
++    return err;
+ }
