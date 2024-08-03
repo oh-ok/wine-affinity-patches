@@ -11,10 +11,10 @@ index 69df0a3073c..aac44bdb20d 100644
 +	cl_khr_d3d10_sharing.c
 diff --git a/dlls/opencl/cl_khr_d3d10_sharing.c b/dlls/opencl/cl_khr_d3d10_sharing.c
 new file mode 100644
-index 00000000000..3bdea174ad4
+index 00000000000..5b569bebad8
 --- /dev/null
 +++ b/dlls/opencl/cl_khr_d3d10_sharing.c
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,144 @@
 +#include "opencl_private.h"
 +#include "opencl_types.h"
 +#include "unixlib.h"
@@ -23,68 +23,48 @@ index 00000000000..3bdea174ad4
 +#define COBJMACROS
 +#include "objbase.h"
 +#include "initguid.h"
-+#include "dxgi1_6.h"
-+
++#include "wine/wined3d.h"
++#include "wine/winedxgi.h"
 +
 +WINE_DEFAULT_DEBUG_CHANNEL(opencl);
 +
 +
 +cl_int compare_dxgi_cl_device(IUnknown* d3d_adapter, cl_device_id cl_device, cl_bool *result) {
 +    cl_int err;
-+    IDXGIAdapter *this;
-+    DXGI_ADAPTER_DESC info;
-+    WCHAR *cl_name;
++    IWineDXGIAdapter *this;
++    DWORD cl_vid;
++    struct wine_dxgi_adapter_info dx_info;
 +    struct clGetDeviceInfo_params params;
 +
-+    // note: it is possible to compare the UUID if the device supports cl_khr_device_uuid
-+    // and I would like to do that, but I also want built in DXVK support :)
-+    // also SLI isn't really supported anymore so probs not relevant
-+    if (FAILED(IUnknown_QueryInterface(d3d_adapter, &IID_IDXGIAdapter, (void **)&this))) {
++    /*
++    So it turns out that the ROCM opencl driver sets the name to a weird codename,
++    and does not support cl_khr_device_uuid, so we can't use those to confirm the devices are the same.
++    There's also some funkiness with clSetEventCallback and/or clFlush.
++    */
++    if (FAILED(IUnknown_QueryInterface(d3d_adapter, &IID_IWineDXGIAdapter, (void **)&this))) {
 +        ERR("Not a IDXGIAdapter %p.\n", d3d_adapter);
 +        return CL_DEVICE_NOT_FOUND;
 +    }
 +
-+    if (FAILED(IDXGIAdapter_GetDesc(this, &info))) {
++    if (FAILED(IWineDXGIAdapter_get_adapter_info(this, &dx_info))) {
 +        ERR("Could not get adapter info %p.\n", this);
 +        IUnknown_Release(this);
 +        return CL_DEVICE_NOT_FOUND;
 +    }
 +    IUnknown_Release(this);
 +
-+
 +    params.device = cl_device;
-+    params.param_name = CL_DEVICE_NAME;
-+    params.param_value = NULL;
-+    params.param_value_size = 0;
-+    params.param_value_size_ret = &params.param_value_size;
++    params.param_name = CL_DEVICE_VENDOR_ID;
++    params.param_value = &cl_vid;
++    params.param_value_size = sizeof(cl_vid);
++    params.param_value_size_ret = NULL;
 +    if ((err = OPENCL_CALL( clGetDeviceInfo, &params ))) {
-+        ERR("Error getting device name of %p; %d.\n", cl_device, err);
++        ERR("Error getting device uuid of %p; %d.\n", cl_device, err);
 +        return err;
 +    }
 +
-+    if (!(params.param_value = calloc(params.param_value_size+1, 1)))
-+        err = CL_OUT_OF_HOST_MEMORY;
-+    if (!(cl_name = calloc(params.param_value_size+1, sizeof(WCHAR))))
-+        err = CL_OUT_OF_HOST_MEMORY;
-+
-+    if (err) {
-+        if (params.param_value) free(params.param_value);
-+        if (cl_name) free(params.param_value);
-+        return err;
-+    }
-+
-+    if ((err = OPENCL_CALL( clGetDeviceInfo, &params ))) {
-+        ERR("Error getting device name of %p; %d.\n", cl_device, err);
-+        return err;
-+    }
-+
-+    mbstowcs(cl_name, params.param_value, params.param_value_size);
-+    free(params.param_value);
-+
-+    TRACE("cl_name %s, from %lld, d3d %s.\n", wine_dbgstr_w(cl_name), params.param_value_size, wine_dbgstr_w(info.Description));
-+    *result = (wcscmp(cl_name, info.Description) == 0);
-+
-+    free(cl_name);
++    *result = cl_vid == dx_info.vendor_id;
++    TRACE("cl_vid %ld, dx_uuid %ld, samedevice %i\n", cl_vid, dx_info.vendor_id, *result);
 +
 +    return CL_SUCCESS;
 +}
@@ -173,7 +153,7 @@ index 00000000000..3bdea174ad4
 +
 +void* cl_khr_d3d10_sharing_get_function(const char* name) {
 +    // NOTE: other functions in this extension seem non-trivial to implement,
-+    // involve lots of deep knowledge of D3D and OpenCL (which I do not have), 
++    // involve lots of deep knowledge of D3D and OpenCL (which I do not have),
 +    // and may involve a heavy rewrite of this whole OpenCL wrapper.
 +    if (!strcmp(name, "clGetDeviceIDsFromD3D10KHR"))
 +        return clGetDeviceIDsFromD3D10KHR;
@@ -196,7 +176,7 @@ index 00000000000..4c7e9955751
 +    {"cl_khr_d3d10_sharing", cl_khr_d3d10_sharing_get_function}
 +};
 diff --git a/dlls/opencl/make_opencl b/dlls/opencl/make_opencl
-index 6d9881c84b3..593ed24ee27 100755
+index 6d9881c84b3..af2839b649c 100755
 --- a/dlls/opencl/make_opencl
 +++ b/dlls/opencl/make_opencl
 @@ -60,7 +60,6 @@ my %unsupported_extensions =
@@ -213,7 +193,7 @@ index 6d9881c84b3..593ed24ee27 100755
  
 +my %provided_extensions =
 +    (
-+        "cl_khr_d3d10_sharing" => 1,  
++        "cl_khr_d3d10_sharing" => 1,
 +    );
 +
  sub generate_pe_thunk($$)
